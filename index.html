@@ -897,7 +897,7 @@
       if (d.address) h += `<div style="font-size:13px;margin-bottom:3px">${d.address}</div>`;
       if (d.phone)   h += `<div style="font-size:13px;margin-bottom:3px">📞 ${d.phone}</div>`;
       if (d.website) h += `<div style="font-size:13px;margin-bottom:3px"><a href="${d.website}" target="_blank" rel="noopener" style="color:#92400e">🌐 Website</a></div>`;
-      h += `<div style="font-size:11px;color:#78716c;margin-top:6px;border-top:1px solid #e7e5e4;padding-top:4px">${d.source === 'obdb' ? 'Open Brewery DB' : 'OpenStreetMap'}</div>`;
+      h += `<div style="font-size:11px;color:#78716c;margin-top:6px;border-top:1px solid #e7e5e4;padding-top:4px">via ${d.source === 'obdb' ? 'Open Brewery DB' : 'OSM'}</div>`;
       return h + `</div>`;
     }
 
@@ -983,16 +983,33 @@
       }
     }
 
-    async function overpassQuery(ql) {
-      const res = await fetchWithTimeout(
-        'https://overpass-api.de/api/interpreter',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'data=' + encodeURIComponent(ql)
-        },
-        15000  // client-side timeout slightly longer than [timeout:10] in QL
-      );
+    async function overpassQuery(ql, attempt = 1) {
+      let res;
+      try {
+        res = await fetchWithTimeout(
+          'https://overpass-api.de/api/interpreter',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'data=' + encodeURIComponent(ql)
+          },
+          15000  // client-side timeout slightly longer than [timeout:10] in QL
+        );
+      } catch (e) {
+        // AbortError = client-side timeout; retry once
+        if (attempt < 2) {
+          console.warn(`[Overpass] request failed (${e.message}) — retrying in 2 s`);
+          await new Promise(r => setTimeout(r, 2000));
+          return overpassQuery(ql, attempt + 1);
+        }
+        throw e;
+      }
+      // 5xx from Overpass (overloaded, gateway timeout): retry once
+      if ((res.status === 504 || res.status === 502 || res.status === 429) && attempt < 2) {
+        console.warn(`[Overpass] HTTP ${res.status} — retrying in 2 s`);
+        await new Promise(r => setTimeout(r, 2000));
+        return overpassQuery(ql, attempt + 1);
+      }
       if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
       const json = await res.json();
       return json.elements || [];
@@ -1095,8 +1112,10 @@ out center;`;
       const ql = `[out:json][timeout:10];
 (
   node["amenity"="cafe"](around:${radiusM},${lat},${lon});
+  way["amenity"="cafe"](around:${radiusM},${lat},${lon});
   node["shop"="coffee"](around:${radiusM},${lat},${lon});
   node["craft"="coffee_roaster"](around:${radiusM},${lat},${lon});
+  way["craft"="coffee_roaster"](around:${radiusM},${lat},${lon});
 );
 out center;`;
 
