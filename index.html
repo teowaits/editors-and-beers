@@ -1007,10 +1007,18 @@
     }
 
     function renderCoffeeLayer() {
+      layers.coffee.clearLayers();
       const data = showMoreCoffee
         ? [...coffeeSpecialty, ...coffeeMore]
         : coffeeSpecialty;
-      renderLayer('coffee', data);
+      const specialtyIcon = makeIcon('🫘', '#92400e', '#fef3c7');
+      const cafeIcon      = makeIcon('☕', '#92400e', '#fef3c7');
+      data.forEach(d => {
+        L.marker([d.lat, d.lon], { icon: d.specialty ? specialtyIcon : cafeIcon })
+          .bindPopup(buildPopupCoffee(d))
+          .addTo(layers.coffee);
+      });
+      updateToggleCount('coffee', data.length);
     }
 
     function clearAllLayers() {
@@ -1046,7 +1054,7 @@
       }
     }
 
-    async function overpassQuery(ql, attempt = 1) {
+    async function overpassQuery(ql, attempt = 1, clientTimeoutMs = 15000) {
       let res;
       try {
         res = await fetchWithTimeout(
@@ -1056,14 +1064,14 @@
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: 'data=' + encodeURIComponent(ql)
           },
-          15000  // client-side timeout slightly longer than [timeout:10] in QL
+          clientTimeoutMs
         );
       } catch (e) {
         // AbortError = client-side timeout; retry once
         if (attempt < 2) {
           console.warn(`[Overpass] request failed (${e.message}) — retrying in 2 s`);
           await new Promise(r => setTimeout(r, 2000));
-          return overpassQuery(ql, attempt + 1);
+          return overpassQuery(ql, attempt + 1, clientTimeoutMs);
         }
         throw e;
       }
@@ -1071,7 +1079,7 @@
       if ((res.status === 504 || res.status === 502 || res.status === 429) && attempt < 2) {
         console.warn(`[Overpass] HTTP ${res.status} — retrying in 2 s`);
         await new Promise(r => setTimeout(r, 2000));
-        return overpassQuery(ql, attempt + 1);
+        return overpassQuery(ql, attempt + 1, clientTimeoutMs);
       }
       if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
       const json = await res.json();
@@ -1181,7 +1189,7 @@ out center;`;
 
     async function fetchCoffee(lat, lon, radiusKm) {
       const radiusM = radiusKm * 1000;
-      const ql = `[out:json][timeout:10];
+      const ql = `[out:json][timeout:25];
 (
   node["amenity"="cafe"](around:${radiusM},${lat},${lon});
   way["amenity"="cafe"](around:${radiusM},${lat},${lon});
@@ -1193,7 +1201,7 @@ out center;`;
 );
 out center;`;
 
-      const elements = await overpassQuery(ql);
+      const elements = await overpassQuery(ql, 1, 30000);
       console.log(`[Overpass/coffee] raw elements: ${elements.length}`);
 
       const seen = new Set();
@@ -1203,8 +1211,9 @@ out center;`;
       elements
         .filter(el => getElementCoords(el) && el.tags && el.tags.name)
         .forEach(el => {
-          if (seen.has(el.id)) return;
-          seen.add(el.id);
+          const key = `${el.type}/${el.id}`;
+          if (seen.has(key)) return;
+          seen.add(key);
 
           const coords = getElementCoords(el);
           const t = el.tags || {};
