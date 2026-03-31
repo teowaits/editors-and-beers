@@ -1120,18 +1120,20 @@
           clientTimeoutMs
         );
       } catch (e) {
-        // AbortError = client-side timeout; retry once
-        if (attempt < 2) {
-          console.warn(`[Overpass] request failed (${e.message}) — retrying in 2 s`);
-          await new Promise(r => setTimeout(r, 2000));
+        // AbortError = client-side timeout; retry up to 2 times with backoff
+        if (attempt < 3) {
+          const delay = attempt * 2000; // 2 s, then 4 s
+          console.warn(`[Overpass] request failed (${e.message}) — retrying in ${delay / 1000} s (attempt ${attempt})`);
+          await new Promise(r => setTimeout(r, delay));
           return overpassQuery(ql, attempt + 1, clientTimeoutMs);
         }
         throw e;
       }
-      // 5xx from Overpass (overloaded, gateway timeout): retry once
-      if ((res.status === 504 || res.status === 502 || res.status === 429) && attempt < 2) {
-        console.warn(`[Overpass] HTTP ${res.status} — retrying in 2 s`);
-        await new Promise(r => setTimeout(r, 2000));
+      // 5xx / 429 from Overpass: retry up to 2 times with backoff
+      if ((res.status === 504 || res.status === 502 || res.status === 429) && attempt < 3) {
+        const delay = attempt * 2000; // 2 s, then 4 s
+        console.warn(`[Overpass] HTTP ${res.status} — retrying in ${delay / 1000} s (attempt ${attempt})`);
+        await new Promise(r => setTimeout(r, delay));
         return overpassQuery(ql, attempt + 1, clientTimeoutMs);
       }
       if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
@@ -1224,10 +1226,21 @@ out center;`;
       }
 
       console.log(`[fetchBreweries] OBDB returned ${obdbResults ? obdbResults.length : 'error'} — firing Overpass fallback`);
-      const osmResults = await fetchBreweriesFallback(lat, lon, radiusKm);
-      console.log(`[Overpass/breweries] after filter: ${osmResults.length}`);
-      brewerySource = 'osm';
-      return osmResults;
+      try {
+        const osmResults = await fetchBreweriesFallback(lat, lon, radiusKm);
+        console.log(`[Overpass/breweries] after filter: ${osmResults.length}`);
+        brewerySource = 'osm';
+        return osmResults;
+      } catch (e) {
+        console.warn('[fetchBreweries] Overpass fallback failed after retries:', e.message);
+        // Return partial OBDB results rather than surfacing an error banner
+        if (obdbResults && obdbResults.length > 0) {
+          console.log('[fetchBreweries] Falling back to partial OBDB results');
+          brewerySource = 'obdb';
+          return obdbResults;
+        }
+        return [];
+      }
     }
 
     // ── Coffee fetcher ─────────────────────────────────────────────────────
