@@ -203,6 +203,29 @@
       border-radius: 4px;
     }
 
+    .btn-more-coffee {
+      background: none;
+      border: 1px dashed var(--color-border);
+      border-radius: 9999px;
+      padding: 4px 12px;
+      font-size: 12px;
+      color: var(--color-muted);
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .btn-more-coffee:hover {
+      border-color: var(--color-accent-coffee);
+      color: var(--color-primary);
+    }
+
+    .btn-more-coffee.active {
+      border-style: solid;
+      border-color: var(--color-accent-coffee);
+      color: var(--color-primary);
+      background: var(--color-primary-light);
+    }
+
     .disclaimer {
       font-size: 12px;
       color: var(--color-muted);
@@ -486,6 +509,7 @@
       </div>
       <div class="layer-meta">
         <span id="brewery-source-badge" class="source-badge" style="display:none;"></span>
+        <button class="btn-more-coffee" id="btn-more-coffee" style="display:none;">+ More cafes (0)</button>
         <span class="disclaimer">Brewery data strongest in US &amp; Canada. Coffee via OpenStreetMap — urban coverage best.</span>
       </div>
     </div>
@@ -546,8 +570,11 @@
     let radiusKm = 5;
     let activeFilters = { breweries: true, coffee: true, editors: true };
     let map, layers, venueMarker;
-    let brewerySource = null;  // 'obdb' | 'osm'
-    let allEditors = [];       // MarkerData[] — retained for re-filtering
+    let brewerySource = null;   // 'obdb' | 'osm'
+    let allEditors = [];        // MarkerData[] — retained for re-filtering
+    let coffeeSpecialty = [];   // specialty/roaster results (shown by default)
+    let coffeeMore = [];        // broad cafe results sorted by completeness
+    let showMoreCoffee = false;
 
     // ── Script loader (verbatim from wherearetheeditors) ───────────────────
     function loadScript(url) {
@@ -600,6 +627,13 @@
           activeFilters[layerId] = !activeFilters[layerId];
           toggleLayer(layerId, activeFilters[layerId]);
         });
+      });
+
+      // More cafes toggle
+      document.getElementById('btn-more-coffee').addEventListener('click', () => {
+        showMoreCoffee = !showMoreCoffee;
+        document.getElementById('btn-more-coffee').classList.toggle('active', showMoreCoffee);
+        renderCoffeeLayer();
       });
 
       // CSV upload
@@ -695,7 +729,16 @@
         }
 
         if (coffeeResult.status === 'fulfilled') {
-          renderLayer('coffee', coffeeResult.value);
+          coffeeSpecialty = coffeeResult.value.specialty;
+          coffeeMore      = coffeeResult.value.more;
+          showMoreCoffee  = false;
+          renderCoffeeLayer();
+          const moreBtn = document.getElementById('btn-more-coffee');
+          if (coffeeMore.length > 0) {
+            moreBtn.textContent = `+ More cafes (${coffeeMore.length})`;
+            moreBtn.style.display = '';
+            moreBtn.classList.remove('active');
+          }
         } else {
           console.error('Coffee fetch failed:', coffeeResult.reason);
         }
@@ -704,7 +747,7 @@
         const brewOk    = brewResult.status === 'fulfilled';
         const coffeeOk  = coffeeResult.status === 'fulfilled';
         const brewCount = brewOk  ? brewResult.value.length  : 0;
-        const coffeeCount = coffeeOk ? coffeeResult.value.length : 0;
+        const coffeeCount = coffeeOk ? (coffeeResult.value.specialty.length + coffeeResult.value.more.length) : 0;
         if (brewOk && coffeeOk && brewCount === 0 && coffeeCount === 0) {
           showStatus(`No breweries or coffee found within ${radiusKm} km. Try a larger radius.`, 'info');
         } else if (brewOk && brewCount === 0) {
@@ -910,6 +953,7 @@
     function buildPopupCoffee(d) {
       let h = `<div style="min-width:200px">`;
       h += `<div style="font-weight:700;font-size:15px;color:#92400e;margin-bottom:6px">☕ ${d.name}</div>`;
+      if (d.specialty) h += `<div style="font-size:12px;color:#92400e;margin-bottom:4px">🫘 Specialty coffee</div>`;
       if (d.type)    h += `<div style="font-size:12px;color:#78716c;margin-bottom:4px;text-transform:capitalize">${d.type}</div>`;
       if (d.address) h += `<div style="font-size:13px;margin-bottom:3px">${d.address}</div>`;
       if (d.website) h += `<div style="font-size:13px;margin-bottom:3px"><a href="${d.website}" target="_blank" rel="noopener" style="color:#92400e">🌐 Website</a></div>`;
@@ -962,15 +1006,28 @@
       document.getElementById(`toggle-${layerId}`).classList.toggle('active', visible);
     }
 
+    function renderCoffeeLayer() {
+      const data = showMoreCoffee
+        ? [...coffeeSpecialty, ...coffeeMore]
+        : coffeeSpecialty;
+      renderLayer('coffee', data);
+    }
+
     function clearAllLayers() {
       ['breweries', 'coffee', 'editors'].forEach(id => {
         layers[id].clearLayers();
         updateToggleCount(id, 0);
       });
       brewerySource = null;
+      coffeeSpecialty = [];
+      coffeeMore = [];
+      showMoreCoffee = false;
       const badge = document.getElementById('brewery-source-badge');
       badge.style.display = 'none';
       badge.textContent = '';
+      const moreBtn = document.getElementById('btn-more-coffee');
+      moreBtn.style.display = 'none';
+      moreBtn.classList.remove('active');
     }
 
     function updateToggleCount(layerId, count) {
@@ -1113,6 +1170,15 @@ out center;`;
     }
 
     // ── Coffee fetcher ─────────────────────────────────────────────────────
+    function coffeeCompletenessScore(tags) {
+      let score = 0;
+      if (tags.website || tags['contact:website']) score++;
+      if (tags.opening_hours) score++;
+      if (tags.phone || tags['contact:phone']) score++;
+      if (tags['addr:street']) score++;
+      return score;
+    }
+
     async function fetchCoffee(lat, lon, radiusKm) {
       const radiusM = radiusKm * 1000;
       const ql = `[out:json][timeout:10];
@@ -1122,34 +1188,59 @@ out center;`;
   node["shop"="coffee"](around:${radiusM},${lat},${lon});
   node["craft"="coffee_roaster"](around:${radiusM},${lat},${lon});
   way["craft"="coffee_roaster"](around:${radiusM},${lat},${lon});
+  node["specialty_coffee"="yes"](around:${radiusM},${lat},${lon});
+  node["microroaster"="yes"](around:${radiusM},${lat},${lon});
 );
 out center;`;
 
       const elements = await overpassQuery(ql);
       console.log(`[Overpass/coffee] raw elements: ${elements.length}`);
 
-      const results = elements
+      const seen = new Set();
+      const specialty = [];
+      const more = [];
+
+      elements
         .filter(el => getElementCoords(el) && el.tags && el.tags.name)
-        .map(el => {
+        .forEach(el => {
+          if (seen.has(el.id)) return;
+          seen.add(el.id);
+
           const coords = getElementCoords(el);
           const t = el.tags || {};
+          const isSpecialty = t['specialty_coffee'] === 'yes'
+                           || t['microroaster'] === 'yes'
+                           || t.craft === 'coffee_roaster'
+                           || t.shop  === 'coffee';
           const type = t.craft === 'coffee_roaster' ? 'coffee roaster'
                      : t.shop  === 'coffee'          ? 'coffee shop'
+                     : t['microroaster'] === 'yes'   ? 'micro roaster'
                      : 'cafe';
-          return {
-            lat:     coords.lat,
-            lon:     coords.lon,
-            name:    t.name,
+          const item = {
+            lat:       coords.lat,
+            lon:       coords.lon,
+            name:      t.name,
             type,
-            address: [t['addr:street'], t['addr:city']].filter(Boolean).join(', '),
-            phone:   '',
-            website: t.website || t['contact:website'] || '',
-            source:  'osm',
-            raw:     el
+            specialty: isSpecialty,
+            address:   [t['addr:street'], t['addr:city']].filter(Boolean).join(', '),
+            phone:     t.phone || t['contact:phone'] || '',
+            website:   t.website || t['contact:website'] || '',
+            source:    'osm',
+            raw:       el
           };
+          if (isSpecialty) {
+            specialty.push(item);
+          } else {
+            more.push(item);
+          }
         });
-      console.log(`[Overpass/coffee] after filter: ${results.length}`);
-      return results;
+
+      more.sort((a, b) =>
+        coffeeCompletenessScore(b.raw.tags || {}) - coffeeCompletenessScore(a.raw.tags || {})
+      );
+
+      console.log(`[Overpass/coffee] specialty: ${specialty.length}, more: ${more.length}`);
+      return { specialty, more };
     }
 
     // ── Geocoding data (verbatim from wherearetheeditors) ─────────────────────
