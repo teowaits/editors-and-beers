@@ -439,7 +439,7 @@
       <p>No data is stored. No analytics. Refreshing the page clears all state.</p>
       <h3>Credits</h3>
       <p>
-        Built by teowaits ·
+        Built by <a href="https://github.com/teowaits" target="_blank" rel="noopener">teowaits</a> ·
         Brewery data: <a href="https://www.openbrewerydb.org" target="_blank" rel="noopener">Open Brewery DB</a> ·
         Map: <a href="https://www.openstreetmap.org" target="_blank" rel="noopener">OpenStreetMap</a>
       </p>
@@ -592,6 +592,15 @@
         if (e.key === 'Enter') handleFind();
       });
 
+      // Layer toggle pills
+      document.querySelectorAll('.toggle-pill').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const layerId = btn.dataset.layer;
+          activeFilters[layerId] = !activeFilters[layerId];
+          toggleLayer(layerId, activeFilters[layerId]);
+        });
+      });
+
       // About modal
       document.getElementById('btn-about').addEventListener('click', () => {
         document.getElementById('modal-about').classList.add('open');
@@ -644,15 +653,68 @@
         .addTo(map);
     }
 
-    // ── Find handler (data fetching wired in Commit 2) ─────────────────────
-    function handleFind() {
+    // ── Find handler ───────────────────────────────────────────────────────
+    async function handleFind() {
       radiusKm = parseFloat(document.getElementById('radius-select').value);
       if (!resolvedVenue) {
         showStatus('Please select a venue or city from the dropdown.', 'error');
         return;
       }
+
       clearStatus();
-      // TODO Commit 2: call fetchBreweries, fetchCoffee, renderLayer
+      clearAllLayers();
+
+      const findBtn = document.getElementById('btn-find');
+      findBtn.disabled = true;
+      findBtn.textContent = 'Finding…';
+
+      const { lat, lon } = resolvedVenue;
+
+      try {
+        const [brewResult, coffeeResult] = await Promise.allSettled([
+          fetchBreweries(lat, lon, radiusKm),
+          fetchCoffee(lat, lon, radiusKm)
+        ]);
+
+        if (brewResult.status === 'fulfilled') {
+          renderLayer('breweries', brewResult.value);
+          const badge = document.getElementById('brewery-source-badge');
+          if (brewResult.value.length > 0) {
+            badge.textContent = 'via ' + (brewerySource === 'obdb' ? 'Open Brewery DB' : 'OSM');
+            badge.style.display = '';
+          }
+        } else {
+          console.error('Breweries fetch failed:', brewResult.reason);
+          showStatus('Could not load brewery data: ' + brewResult.reason.message, 'error');
+        }
+
+        if (coffeeResult.status === 'fulfilled') {
+          renderLayer('coffee', coffeeResult.value);
+        } else {
+          console.error('Coffee fetch failed:', coffeeResult.reason);
+        }
+
+        // Empty-state messaging (only when both succeeded with 0 results)
+        const brewOk    = brewResult.status === 'fulfilled';
+        const coffeeOk  = coffeeResult.status === 'fulfilled';
+        const brewCount = brewOk  ? brewResult.value.length  : 0;
+        const coffeeCount = coffeeOk ? coffeeResult.value.length : 0;
+        if (brewOk && coffeeOk && brewCount === 0 && coffeeCount === 0) {
+          showStatus(`No breweries or coffee found within ${radiusKm} km. Try a larger radius.`, 'info');
+        } else if (brewOk && brewCount === 0) {
+          showStatus(`No breweries found within ${radiusKm} km — coffee results shown.`, 'info');
+        }
+
+        // Re-filter editors if a CSV was already geocoded
+        if (allEditors.length > 0) {
+          const filtered = allEditors.filter(e => haversineKm(lat, lon, e.lat, e.lon) <= radiusKm);
+          renderLayer('editors', filtered);
+        }
+
+      } finally {
+        findBtn.disabled = false;
+        findBtn.textContent = 'Find';
+      }
     }
 
     // ── Status helpers ─────────────────────────────────────────────────────
@@ -793,6 +855,276 @@
       });
 
       inputEl._acIsOpen = () => dropdownOpen;
+    }
+
+    // ── Haversine distance ─────────────────────────────────────────────────
+    function haversineKm(lat1, lon1, lat2, lon2) {
+      const R    = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a    = Math.sin(dLat/2) * Math.sin(dLat/2)
+                 + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180)
+                 * Math.sin(dLon/2) * Math.sin(dLon/2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // ── Marker icon factory (spec: CLAUDE.md §"Marker visual language") ────
+    function makeIcon(emoji, borderColor, fillColor) {
+      return L.divIcon({
+        html: `<div style="
+          width:36px;height:36px;border-radius:50%;
+          background:${fillColor};border:2px solid ${borderColor};
+          display:flex;align-items:center;justify-content:center;
+          line-height:1;font-size:18px;box-shadow:0 2px 6px rgba(0,0,0,0.2);">${emoji}</div>`,
+        className:   '',
+        iconSize:    [36, 36],
+        iconAnchor:  [18, 18],
+        popupAnchor: [0, -20]
+      });
+    }
+
+    // ── Popup builders ─────────────────────────────────────────────────────
+    function buildPopup(layerId, d) {
+      if (layerId === 'breweries') return buildPopupBrewery(d);
+      if (layerId === 'coffee')    return buildPopupCoffee(d);
+      return buildPopupEditor(d);
+    }
+
+    function buildPopupBrewery(d) {
+      let h = `<div style="min-width:220px">`;
+      h += `<div style="font-weight:700;font-size:15px;color:#92400e;margin-bottom:6px">🍺 ${d.name}</div>`;
+      if (d.type)    h += `<div style="font-size:12px;color:#78716c;margin-bottom:4px;text-transform:capitalize">${d.type}</div>`;
+      if (d.address) h += `<div style="font-size:13px;margin-bottom:3px">${d.address}</div>`;
+      if (d.phone)   h += `<div style="font-size:13px;margin-bottom:3px">📞 ${d.phone}</div>`;
+      if (d.website) h += `<div style="font-size:13px;margin-bottom:3px"><a href="${d.website}" target="_blank" rel="noopener" style="color:#92400e">🌐 Website</a></div>`;
+      h += `<div style="font-size:11px;color:#78716c;margin-top:6px;border-top:1px solid #e7e5e4;padding-top:4px">${d.source === 'obdb' ? 'Open Brewery DB' : 'OpenStreetMap'}</div>`;
+      return h + `</div>`;
+    }
+
+    function buildPopupCoffee(d) {
+      let h = `<div style="min-width:200px">`;
+      h += `<div style="font-weight:700;font-size:15px;color:#92400e;margin-bottom:6px">☕ ${d.name}</div>`;
+      if (d.type)    h += `<div style="font-size:12px;color:#78716c;margin-bottom:4px;text-transform:capitalize">${d.type}</div>`;
+      if (d.address) h += `<div style="font-size:13px;margin-bottom:3px">${d.address}</div>`;
+      if (d.website) h += `<div style="font-size:13px;margin-bottom:3px"><a href="${d.website}" target="_blank" rel="noopener" style="color:#92400e">🌐 Website</a></div>`;
+      return h + `</div>`;
+    }
+
+    // buildPopupEditor is defined in Commit 3 alongside the editors layer
+    function buildPopupEditor(d) {
+      let h = `<div style="min-width:220px">`;
+      h += `<div style="font-weight:700;font-size:15px;color:#0d9488;margin-bottom:6px">👩‍🔬 ${d.name}</div>`;
+      if (d.role)        h += `<div style="font-size:13px;margin-bottom:3px">${d.role}${d.journal ? ' — ' + d.journal : ''}</div>`;
+      if (d.affiliation) h += `<div style="font-size:13px;margin-bottom:3px">${d.affiliation}</div>`;
+      if (d.country)     h += `<div style="font-size:13px;color:#78716c;margin-bottom:3px">${d.country}</div>`;
+      const links = [];
+      if (d.email)   links.push(`<a href="mailto:${d.email}" style="color:#0d9488">✉ Email</a>`);
+      if (d.website) links.push(`<a href="${d.website}" target="_blank" rel="noopener" style="color:#0d9488">🌐 Website</a>`);
+      if (links.length) h += `<div style="font-size:13px;margin-bottom:3px">${links.join(' · ')}</div>`;
+      if (d.source) {
+        const method = { builtin: 'institution database', nominatim: 'Nominatim', country: 'country fallback' }[d.source] || d.source;
+        h += `<div style="font-size:11px;color:#78716c;margin-top:6px;border-top:1px solid #e7e5e4;padding-top:4px">geocoded via ${method}</div>`;
+      }
+      return h + `</div>`;
+    }
+
+    // ── Layer management ───────────────────────────────────────────────────
+    const LAYER_CONFIG = {
+      breweries: { emoji: '🍺', label: 'Breweries', border: '#f59e0b', fill: '#fffbeb' },
+      coffee:    { emoji: '☕', label: 'Coffee',    border: '#92400e', fill: '#fef3c7' },
+      editors:   { emoji: '👩‍🔬', label: 'Editors',   border: '#0d9488', fill: '#f0fdfa' }
+    };
+
+    function renderLayer(layerId, data) {
+      layers[layerId].clearLayers();
+      const { emoji, border, fill } = LAYER_CONFIG[layerId];
+      const icon = makeIcon(emoji, border, fill);
+      data.forEach(d => {
+        L.marker([d.lat, d.lon], { icon })
+          .bindPopup(buildPopup(layerId, d))
+          .addTo(layers[layerId]);
+      });
+      updateToggleCount(layerId, data.length);
+    }
+
+    function toggleLayer(layerId, visible) {
+      if (visible) {
+        if (!map.hasLayer(layers[layerId])) map.addLayer(layers[layerId]);
+      } else {
+        if (map.hasLayer(layers[layerId])) map.removeLayer(layers[layerId]);
+      }
+      document.getElementById(`toggle-${layerId}`).classList.toggle('active', visible);
+    }
+
+    function clearAllLayers() {
+      ['breweries', 'coffee', 'editors'].forEach(id => {
+        layers[id].clearLayers();
+        updateToggleCount(id, 0);
+      });
+      brewerySource = null;
+      const badge = document.getElementById('brewery-source-badge');
+      badge.style.display = 'none';
+      badge.textContent = '';
+    }
+
+    function updateToggleCount(layerId, count) {
+      const { emoji, label } = LAYER_CONFIG[layerId];
+      document.getElementById(`toggle-${layerId}`).textContent = `${emoji} ${label} (${count})`;
+    }
+
+    // ── Fetch helpers ──────────────────────────────────────────────────────
+    async function fetchWithTimeout(url, options, ms = 12000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), ms);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function overpassQuery(ql) {
+      const res = await fetchWithTimeout(
+        'https://overpass-api.de/api/interpreter',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(ql)
+        },
+        15000  // client-side timeout slightly longer than [timeout:10] in QL
+      );
+      if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+      const json = await res.json();
+      return json.elements || [];
+    }
+
+    // Extract lat/lon from a node or way-with-center Overpass element
+    function getElementCoords(el) {
+      if (el.type === 'node') return { lat: el.lat,        lon: el.lon };
+      if (el.center)          return { lat: el.center.lat, lon: el.center.lon };
+      return null;
+    }
+
+    // ── Brewery fetchers ───────────────────────────────────────────────────
+    const OBDB_EXCLUDED_TYPES = new Set(['large', 'bar', 'planning', 'contract', 'proprietor', 'closed']);
+
+    async function fetchBreweriesOBDB(lat, lon, radiusKm) {
+      const url = `https://api.openbrewerydb.org/v1/breweries?by_dist=${lat},${lon}&per_page=50`;
+      const res = await fetchWithTimeout(url, {}, 12000);
+      if (!res.ok) throw new Error(`Open Brewery DB HTTP ${res.status}`);
+      const data = await res.json();
+      console.log(`[OBDB] raw response: ${data.length} breweries`);
+
+      const filtered = data.filter(b => {
+        if (!b.latitude || !b.longitude) return false;
+        if (OBDB_EXCLUDED_TYPES.has(b.brewery_type)) return false;
+        return haversineKm(lat, lon, parseFloat(b.latitude), parseFloat(b.longitude)) <= radiusKm;
+      });
+      console.log(`[OBDB] after Haversine+type filter (${radiusKm} km): ${filtered.length} breweries`);
+
+      return filtered.map(b => ({
+        lat:     parseFloat(b.latitude),
+        lon:     parseFloat(b.longitude),
+        name:    b.name,
+        type:    b.brewery_type || 'brewery',
+        address: [b.street, b.city, b.state].filter(Boolean).join(', '),
+        phone:   b.phone || '',
+        website: b.website_url || '',
+        source:  'obdb',
+        raw:     b
+      }));
+    }
+
+    async function fetchBreweriesFallback(lat, lon, radiusKm) {
+      const radiusM = radiusKm * 1000;
+      const ql = `[out:json][timeout:10];
+(
+  node["craft"="brewery"](around:${radiusM},${lat},${lon});
+  way["craft"="brewery"](around:${radiusM},${lat},${lon});
+  node["amenity"="bar"]["craft"="brewery"](around:${radiusM},${lat},${lon});
+  node["amenity"="pub"](around:${radiusM},${lat},${lon});
+);
+out center;`;
+
+      const elements = await overpassQuery(ql);
+      console.log(`[Overpass/breweries] raw elements: ${elements.length}`);
+
+      return elements
+        .filter(el => getElementCoords(el) && el.tags && el.tags.name)
+        .map(el => {
+          const coords = getElementCoords(el);
+          const t = el.tags || {};
+          return {
+            lat:     coords.lat,
+            lon:     coords.lon,
+            name:    t.name,
+            type:    'brewery',
+            address: [t['addr:street'], t['addr:city']].filter(Boolean).join(', '),
+            phone:   t.phone || t['contact:phone'] || '',
+            website: t.website || t['contact:website'] || '',
+            source:  'osm',
+            raw:     el
+          };
+        });
+    }
+
+    // Orchestrator: try OBDB first; fall back to Overpass if post-filter count < 3
+    async function fetchBreweries(lat, lon, radiusKm) {
+      let obdbResults = null;
+      try {
+        obdbResults = await fetchBreweriesOBDB(lat, lon, radiusKm);
+      } catch (e) {
+        console.warn('[fetchBreweries] OBDB failed, trying Overpass:', e.message);
+      }
+
+      if (obdbResults !== null && obdbResults.length >= 3) {
+        brewerySource = 'obdb';
+        return obdbResults;
+      }
+
+      console.log(`[fetchBreweries] OBDB returned ${obdbResults ? obdbResults.length : 'error'} — firing Overpass fallback`);
+      const osmResults = await fetchBreweriesFallback(lat, lon, radiusKm);
+      console.log(`[Overpass/breweries] after filter: ${osmResults.length}`);
+      brewerySource = 'osm';
+      return osmResults;
+    }
+
+    // ── Coffee fetcher ─────────────────────────────────────────────────────
+    async function fetchCoffee(lat, lon, radiusKm) {
+      const radiusM = radiusKm * 1000;
+      const ql = `[out:json][timeout:10];
+(
+  node["amenity"="cafe"](around:${radiusM},${lat},${lon});
+  node["shop"="coffee"](around:${radiusM},${lat},${lon});
+  node["craft"="coffee_roaster"](around:${radiusM},${lat},${lon});
+);
+out center;`;
+
+      const elements = await overpassQuery(ql);
+      console.log(`[Overpass/coffee] raw elements: ${elements.length}`);
+
+      const results = elements
+        .filter(el => getElementCoords(el) && el.tags && el.tags.name)
+        .map(el => {
+          const coords = getElementCoords(el);
+          const t = el.tags || {};
+          const type = t.craft === 'coffee_roaster' ? 'coffee roaster'
+                     : t.shop  === 'coffee'          ? 'coffee shop'
+                     : 'cafe';
+          return {
+            lat:     coords.lat,
+            lon:     coords.lon,
+            name:    t.name,
+            type,
+            address: [t['addr:street'], t['addr:city']].filter(Boolean).join(', '),
+            phone:   '',
+            website: t.website || t['contact:website'] || '',
+            source:  'osm',
+            raw:     el
+          };
+        });
+      console.log(`[Overpass/coffee] after filter: ${results.length}`);
+      return results;
     }
 
   </script>
