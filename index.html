@@ -232,6 +232,56 @@
       font-style: italic;
     }
 
+    /* ── Info tooltips ── */
+    .info-tip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: help;
+      font-style: normal;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--color-muted);
+      background: #e7e5e4;
+      border-radius: 50%;
+      width: 14px;
+      height: 14px;
+      vertical-align: middle;
+      margin-left: 3px;
+      flex-shrink: 0;
+    }
+
+    .tip-content {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #292524;
+      color: #faf7f2;
+      font-size: 12px;
+      font-style: normal;
+      font-weight: 400;
+      border-radius: 8px;
+      padding: 8px 12px;
+      width: 240px;
+      line-height: 1.5;
+      z-index: 500;
+      pointer-events: none;
+      white-space: normal;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .info-tip:hover .tip-content { display: block; }
+
+    /* pull right-edge tooltips leftward so they don't overflow */
+    .info-tip.tip-left .tip-content {
+      left: auto;
+      right: 0;
+      transform: none;
+    }
+
     /* ── Geocoding progress bar (outside collapsible) ── */
     #geocoding-progress {
       background: var(--color-surface);
@@ -510,7 +560,10 @@
       <div class="layer-meta">
         <span id="brewery-source-badge" class="source-badge" style="display:none;"></span>
         <button class="btn-more-coffee" id="btn-more-coffee" style="display:none;">+ More cafes (0)</button>
-        <span class="disclaimer">Brewery data strongest in US &amp; Canada. Coffee via OpenStreetMap — urban coverage best.</span>
+        <span class="disclaimer">
+          Brewery data strongest in US &amp; Canada<span class="info-tip">i<span class="tip-content">Outside North America, brewery results come from OpenStreetMap and may include pubs and venues that serve beer, not only dedicated breweries.</span></span>
+          · Coffee via OpenStreetMap — urban coverage best<span class="info-tip tip-left">i<span class="tip-content">🫘 Specialty coffee shows dedicated specialty cafés and roasters tagged in OSM. Tap "+ More cafes" to reveal all cafés, ranked by how complete their OSM listing is.</span></span>
+        </span>
       </div>
     </div>
 
