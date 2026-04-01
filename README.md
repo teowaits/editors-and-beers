@@ -78,6 +78,9 @@ Brewery data is strongest in the US and Canada. Outside North America, results c
 
 ## Changelog
 
+### v1.2
+- Brewery popups now include a **🍻 Search on Untappd ↗** deep-link — opens a pre-filled Untappd search for that brewery in a new tab, no API key required
+
 ### v1.1
 - Coffee layer redesigned: specialty cafés and roasters shown by default (🫘 pin); **+ More cafes** reveals broader results ranked by OSM listing completeness
 - (i) tooltips added to data source disclaimers
